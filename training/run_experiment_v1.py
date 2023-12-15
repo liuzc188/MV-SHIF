@@ -1,5 +1,4 @@
 # @Time : 2023/11/19 20:28
-# @Author : Cheng Yang
 # @File ：run_experiment_v1.py
 
 import json
@@ -23,12 +22,11 @@ from transformers import BertTokenizer, BertModel, AutoTokenizer, AutoModel, Ber
 
 warnings.filterwarnings("ignore")
 
-# ========================= 超参数设置 =========================
 SEED = 126  # 37199, 129, 130, 144
 epochs = 30
 batch_size = 1
 lr = 1e-5  # 1e-5
-step1_threshold = 0.5  # 预测结果的概率阈值
+step1_threshold = 0.5
 step2_threshold = 0.3
 step3_threshold = 0.3
 chinese = False
@@ -44,26 +42,30 @@ torch.backends.cudnn.deterministic = True
 if chinese:
     truncation_length = 300  # <= 512 chinese
 
-    # BERT_PATH = '/home/ubuntu/workspace1/rmj/ECPE/ecpe_extractor/artifacts/bert_chinese'  # chinese
+    # BERT_PATH = '/home/ubuntu/workspace1/rmj/ECPE/ecpe_extractor/artifacts/bert_chinese'
     BERT_PATH = '/home/ubuntu/workspace1/rmj/LJP/PLM/nezha'
 
-    dataset_folder_path = '/home/ubuntu/workspace1/rmj/ECPE/ecpe_extractor/data/CV/'  # chinese dataset
+    dataset_folder_path = '/home/ubuntu/workspace1/rmj/ECPE/ecpe_extractor/data/CV/'
 
-    emotion_query_template = "这是情感子句吗?"
-    all_cause_query_template = '这句话对应的原因子句有哪些?'
-    one_emotion_query_template = '这句话对应的情感子句是哪一句?'
+    emotion_query_template = "是描述事件情感的情感子句"
+    all_cause_query_template = '是描述事件原因的原因子句'
+    one_emotion_query_template = '导致了'
+    one_query_emotion_template = '发生的原因是'
+    cause_emotion_template = '存在情感原因关系'
+    emotion_cause_template = '存在情感原因关系'
 else:
     truncation_length = 370  # <= 512 english
 
-    # BERT_PATH = '/home/ubuntu/workspace1/rmj/ECPE/ecpe_extractor/artifacts/bert'  # english
-    BERT_PATH = '/home/ubuntu/workspace1/rmj/ECPE/ecpe_extractor/artifacts/roberta_english'  # english
+    BERT_PATH = 'path'  # english
 
-    dataset_folder_path = '/home/ubuntu/workspace1/rmj/ECPE/ecpe_extractor/dataEnglish/CV/'  # english dataset
+    dataset_folder_path = './ecpe_extractor/dataEnglish/CV/'  # dataset
 
-    emotion_query_template = "Is this an emotional clause?"
-    all_cause_query_template = 'The corresponding causal clauses for this sentence are?'
-    one_emotion_query_template = 'Which sentence is the emotional clause corresponding to this sentence?'
-
+    emotion_query_template = "is an emotion clause describing the emotion of an event."
+    all_cause_query_template = 'is a cause clause describing the cause of an event.'
+    one_emotion_query_template = 'results in'
+    one_query_emotion_template = 'The cause of'
+    cause_emotion_template = 'There exists an emotion-cause relationship between'
+    emotion_cause_template = 'There exists an emotion-cause relationship between'
 
 # ========================= 数据加载 =========================
 class Train_Dataset(object):
@@ -147,16 +149,16 @@ def combine(query_list, clause_list):
         seg_list.append(seg)  # [[0, ..., 0, 1, ..., 1], [0, ..., 0, 1, ..., 1], ...]
 
         max_input_length = len(input) if len(input) > max_input_length else max_input_length
-        if len(input) > truncation_length:  # 序列长度大于300的数据样本极少 同时截断处理可能会破坏情感子句或原因子句 故直接舍弃
-            cnt1 += 1  # 统计序列长度大于截断阈值的数据样本数量
+        if len(input) > truncation_length:  
+            cnt1 += 1 
             input_list.pop()
             seg_list.pop()
             query_span_list.pop()
             clause_span_list.pop()
-        cnt2 += 1  # 统计数据样本总数
-        if len(input_list) != 0:  # 文本可能只存在一个 <情感子句, 原因子句> 对, pop 后列表为空
+        cnt2 += 1
+        if len(input_list) != 0:
             if len(input_list[-1]) > truncation_length:
-                cnt3 += 1  # 验证舍弃处理是否有效
+                cnt3 += 1
     return input_list, seg_list, query_span_list, clause_span_list
 
 
@@ -193,15 +195,15 @@ def load_train_dataset(dataset_type):
         static_emotion_query = emotion_query_template  # step1
         step1_query_list.append(static_emotion_query)
 
-        doc_len = int(doc['doc_len'])  # 文本子句个数, e.g. 4
+        doc_len = int(doc['doc_len'])
         doc_clauses = doc[
-            'clauses']  # 文本子句, e.g. [{'clause_id': '1', 'emotion_category': 'null', 'emotion_token': 'null', 'clause': '6月6日'}, {}]
+            'clauses']  
         clause_list = []
         for i in range(doc_len):
             clause_list.append(doc_clauses[i]['clause'])
 
-        doc_pairs = doc['pairs']  # 文本 <情感子句, 原因子句> 对, e.g. [[1,2],[3,4]]
-        for pair in doc_pairs:  # 一个情感子句可能对应多个原因子句 一个原因子句对应一个情感子句
+        doc_pairs = doc['pairs'] 
+        for pair in doc_pairs:
             emotion_clause_idx = pair[0]
             cause_clause_idx = pair[1]
             if (emotion_clause_idx - 1) not in emotion_cause_dic.keys():
@@ -211,25 +213,17 @@ def load_train_dataset(dataset_type):
                     if i == emotion_clause_idx:
                         corresponding_cause_clause_idx_list.append(j - 1)
                 emotion_cause_dic[emotion_clause_idx - 1] = corresponding_cause_clause_idx_list
-                # dynamic_cause_query = clause_list[
-                #                           emotion_clause_idx - 1] + 'The corresponding causal clauses for this sentence are?'  # step2
                 dynamic_cause_query = clause_list[
                                           emotion_clause_idx - 1] + all_cause_query_template  # step2
                 step2_query_list.append(dynamic_cause_query)
 
             cause_clause_idx_list.append(cause_clause_idx - 1)
             cause_emotion_dic[cause_clause_idx - 1] = emotion_clause_idx - 1
-            # dynamic_emotion_query = clause_list[
-            #                             cause_clause_idx - 1] + 'Which sentence is the emotional clause corresponding to this sentence?'  # step3
             dynamic_emotion_query = clause_list[
                                         cause_clause_idx - 1] + one_emotion_query_template  # step3
 
             step3_query_list.append(dynamic_emotion_query)
 
-        # input_list: [['[CLS]', '7', '月', '[SEP]', ...], ['[CLS]', '11', '日', '[SEP]', ...], ...]
-        # seg_list: [[0, ..., 0, 1, ..., 1], [0, ..., 0, 1, ..., 1], ...]
-        # query_span_list: [(1,4), (1,8), ...]
-        # clause_span_list: [[(6,3), (9,5), ...], [(10,4), (14,7), ...], ...]
         step1_input_list, step1_seg_list, step1_query_span_list, step1_clause_span_list = combine(step1_query_list,
                                                                                                   clause_list)
         step2_input_list, step2_seg_list, step2_query_span_list, step2_clause_span_list = combine(step2_query_list,
@@ -237,29 +231,17 @@ def load_train_dataset(dataset_type):
         step3_input_list, step3_seg_list, step3_query_span_list, step3_clause_span_list = combine(step3_query_list,
                                                                                                   clause_list)
 
-        if len(step1_input_list) == 0 or len(step2_input_list) == 0 or len(step3_input_list) == 0:  # 保证3step完整训练过程
+        if len(step1_input_list) == 0 or len(step2_input_list) == 0 or len(step3_input_list) == 0:
             continue
 
-        # 数据集中某一文本 3step 的相关信息
         dataset_step1.append((step1_input_list, step1_seg_list, step1_query_span_list, step1_clause_span_list))
         dataset_step2.append((step2_input_list, step2_seg_list, step2_query_span_list, step2_clause_span_list))
         dataset_step3.append((step3_input_list, step3_seg_list, step3_query_span_list, step3_clause_span_list))
 
-        # print(doc["doc_id"])
-
-        # emotion_clause_idx_list: [8, ...]
-        # emotion_cause_dic: {8:[9, ...], ...} 一个情感子句可能对应多个原因子句
         dataset_emotion_clause_idx_list.append(emotion_clause_idx_list)
         dataset_emotion_cause_dic.append(emotion_cause_dic)
         assert len(emotion_clause_idx_list) == len(step2_input_list)
 
-        # cause_clause_idx_list: [9, ...]
-        # cause_emotion_dic: {9:8} 一个原因子句对应一个情感子句
-        dataset_cause_clause_idx_list.append(cause_clause_idx_list)
-        dataset_cause_emotion_dic.append(cause_emotion_dic)
-        # print("len(cause_clause_idx_list)", len(cause_clause_idx_list))
-        # print("len(step3_input_list)", len(step3_input_list))
-        # print(doc["doc_id"])
         assert len(cause_clause_idx_list) == len(step3_input_list)
     return Train_Dataset(dataset_step1, dataset_step2, dataset_step3, dataset_emotion_clause_idx_list,
                          dataset_emotion_cause_dic, dataset_cause_clause_idx_list, dataset_cause_emotion_dic)
@@ -292,7 +274,6 @@ def load_test_dataset(dataset_type):
         cause_clause_idx_list = []
         cause_emotion_dic = {}
 
-        # static_emotion_query = "Is this an emotional clause?"  # step1 input
         static_emotion_query = emotion_query_template  # step1 input
         step1_query_list.append(static_emotion_query)
 
@@ -326,7 +307,7 @@ def load_test_dataset(dataset_type):
         step1_input_list, step1_seg_list, step1_query_span_list, step1_clause_span_list = combine(step1_query_list,
                                                                                                   clause_list)
 
-        if len(step1_input_list) == 0:  # 保证3step完整训练过程
+        if len(step1_input_list) == 0:
             continue
 
         dataset_step1.append((step1_input_list, step1_seg_list, step1_query_span_list, step1_clause_span_list))
@@ -344,7 +325,6 @@ train_dataset = load_train_dataset('train')
 test_dataset = load_test_dataset('test')
 
 
-########## 模型构建 ##########
 class GraphAttentionLayer(nn.Module):
     def __init__(self, in_features, out_features, dropout, alpha, concat=True):
         super(GraphAttentionLayer, self).__init__()
@@ -362,15 +342,15 @@ class GraphAttentionLayer(nn.Module):
         self.leakyrelu = nn.LeakyReLU(self.alpha)
 
     def forward(self, input, adj):
-        h = torch.mm(input, self.W)  # [N, in_features] * [in_features, out_features] -> [N, out_features] 特征映射
+        h = torch.mm(input, self.W) 
         N = h.size()[0]
 
         a_input = torch.cat([h.repeat(1, N).view(N * N, -1), h.repeat(N, 1)], dim=1).view(N, -1,
                                                                                           2 * self.out_features)  # [N, N, 2 * out_features]
         e = self.leakyrelu(torch.matmul(a_input, self.a).squeeze(2))  # [N, N, 1] -> [N, N]
 
-        zero_vec = -9e15 * torch.ones_like(e)  # sigmoid 时 exp(-9e15) 趋近于0
-        attention = torch.where(adj > 0, e, zero_vec)  # 原始论文注意力分数由一阶邻居计算
+        zero_vec = -9e15 * torch.ones_like(e) 
+        attention = torch.where(adj > 0, e, zero_vec) 
         attention = F.softmax(attention, dim=1)
         attention = F.dropout(attention, self.dropout, training=self.training)
         h_prime = torch.matmul(attention, h)  # [N, N] * [N, out_features] -> [N, out_features]
@@ -417,56 +397,15 @@ class Net(nn.Module):
 
     def forward(self, step_type, idx, input_ids, attention_mask, token_type_ids, query_span, clause_span,
                 emotion_clause_idx_list, emotion_cause_dic, cause_clause_idx_list, cause_emotion_dic):
-        # input_ids (1, 300)
-        # attention_mask (1, 300)
-        # token_type_ids (1, 300)
-        # query_span: (1, 8)
-        # clause_span: [(10, 4), (14, 11), ...]
-        # emotion_clause_idx_list: [9]
-        # cause_clause_idx_list: [8]
-        # emotion_cause_dic: {9:[8]}
-        # cause_emotion_dic: {8:9}
+
         if step_type == 'step1':
             bert_output = self.bert(input_ids=input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)[
                 0]
-            bert_output = bert_output.squeeze(0)  # 删除 Batch 维度 (300, 768)
+            bert_output = bert_output.squeeze(0)
 
             query_span_start, query_span_len = query_span
             query = bert_output[query_span_start:query_span_start + query_span_len]
             query = self.attention(query)  # (768,)
-
-            clause_num = len(clause_span)
-            clauses = torch.zeros((clause_num, 768))  # (clause_num, 768)
-            for i, (clause_span_start, clause_span_len) in enumerate(clause_span):
-                clause = bert_output[clause_span_start:clause_span_start + clause_span_len]
-                clause = self.attention(clause)
-                clauses[i] = clause
-
-            adj = torch.ones((clause_num, clause_num))  # GAT 原论文中仅计算一阶邻居节点的注意力分数 当前任务中 不确定情感子句和原因子句的相对位置 故计算全局注意力分数
-
-            clauses = self.gat(clauses.to(device), adj.to(device))  # (clause_num, 768)
-            queries = query.repeat(clause_num, 1)  # (clause_num, 768)
-            combination = torch.cat([queries, clauses], dim=1)  # (clause_num, 768 * 2)
-
-            pre = self.pre_linear(combination).squeeze(-1)
-            pre = nn.Sigmoid()(pre)  # 搭配 nn.BCELoss 使用 nn.CrossEntropyLoss 内嵌了 soft-max 函数
-            label = torch.zeros(clause_num).to(device)
-            for i in emotion_clause_idx_list:
-                label[i] = 1
-
-            return pre, label
-
-        if step_type == 'step2':
-            bert_output = self.bert(input_ids=input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)[
-                0]
-            bert_output = bert_output.squeeze(0)  # 删除 Batch 维度 (300, 768)
-
-            query_span_start, query_span_len = query_span
-            query = bert_output[query_span_start:query_span_start + query_span_len]
-            query = self.attention(query)  # (768,)
-
-            corresponding_emotion_clause_idx = emotion_clause_idx_list[idx]
-            corresponding_cause_clause_idx_list = emotion_cause_dic[corresponding_emotion_clause_idx]
 
             clause_num = len(clause_span)
             clauses = torch.zeros((clause_num, 768))  # (clause_num, 768)
@@ -481,6 +420,39 @@ class Net(nn.Module):
             queries = query.repeat(clause_num, 1)  # (clause_num, 768)
             combination = torch.cat([queries, clauses], dim=1)  # (clause_num, 768 * 2)
 
+            pre = self.pre_linear(combination).squeeze(-1)
+            pre = nn.Sigmoid()(pre) 
+            label = torch.zeros(clause_num).to(device)
+            for i in emotion_clause_idx_list:
+                label[i] = 1
+
+            return pre, label
+
+        if step_type == 'step2':
+            bert_output = self.bert(input_ids=input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)[
+                0]
+            bert_output = bert_output.squeeze(0) 
+
+            query_span_start, query_span_len = query_span
+            query = bert_output[query_span_start:query_span_start + query_span_len]
+            query = self.attention(query) 
+
+            corresponding_emotion_clause_idx = emotion_clause_idx_list[idx]
+            corresponding_cause_clause_idx_list = emotion_cause_dic[corresponding_emotion_clause_idx]
+
+            clause_num = len(clause_span)
+            clauses = torch.zeros((clause_num, 768))
+            for i, (clause_span_start, clause_span_len) in enumerate(clause_span):
+                clause = bert_output[clause_span_start:clause_span_start + clause_span_len]
+                clause = self.attention(clause)
+                clauses[i] = clause
+
+            adj = torch.ones((clause_num, clause_num))
+
+            clauses = self.gat(clauses.to(device), adj.to(device)) 
+            queries = query.repeat(clause_num, 1)
+            combination = torch.cat([queries, clauses], dim=1) 
+
             pre = torch.sigmoid(self.pre_linear(combination).squeeze(-1))
             label = torch.zeros(clause_num).to(device)
             for i in corresponding_cause_clause_idx_list:
@@ -491,13 +463,13 @@ class Net(nn.Module):
         if step_type == 'step3':
             bert_output = self.bert(input_ids=input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)[
                 0]
-            bert_output = bert_output.squeeze(0)  # 删除 Batch 维度 (300, 768)
+            bert_output = bert_output.squeeze(0) 
 
             query_span_start, query_span_len = query_span
             query = bert_output[query_span_start:query_span_start + query_span_len]
             query = self.attention(query)  # (768,)
 
-            try:  # 验证时 step2 预测出的原因子句个数可能大于真的原因子句个数
+            try: 
                 corresponding_cause_clause_idx = cause_clause_idx_list[idx]
                 corresponding_emotion_clause_idx = cause_emotion_dic[corresponding_cause_clause_idx]
             except:
@@ -523,7 +495,6 @@ class Net(nn.Module):
             return pre, label
 
 
-########## 验证过程 ##########
 def val(model, test_dataset, tokenizer, epoch):
     total_emotion_precision = 0
     total_emotion_recall = 0
@@ -545,24 +516,16 @@ def val(model, test_dataset, tokenizer, epoch):
             test_bar.set_description('Epoch %i test' % epoch)
 
             for step1, emotion_clause_idx_list, emotion_cause_dic, cause_clause_idx_list, cause_emotion_dic, clauses, pairs in test_dataloader:
-                # ========================== step1 ==========================
                 step_type = 'step1'
                 emotion_clause_pre = []
                 emotion_precision, emotion_recall, emotion_f1 = 0, 0, 0
                 step1_input_list, step1_seg_list, step1_query_span_list, step1_clause_span_list = step1
                 for idx, (step1_input, step1_seg, step1_query_span, step1_clause_span) in enumerate(
                         zip(step1_input_list, step1_seg_list, step1_query_span_list, step1_clause_span_list)):
-                    # input: ['[CLS]', '7', '月', '[SEP]', ...]
-                    # seg: [0, ..., 0, 1, ..., 1]
-                    # query_span: (1, 8)
-                    # clause_span: [(10, 4), (14, 11), ...]
-                    # emotion_clause_idx_list: [9]
-                    # cause_clause_idx_list: [8]
-                    # emotion_cause_dic: {9:[8]}
-                    # cause_emotion_dic: {8:9}
+
                     ppl_result = tokenizer(step1_input, add_special_tokens=False, padding='max_length', truncation=True,
                                            max_length=truncation_length, is_split_into_words=True)
-                    input_ids = torch.tensor(ppl_result['input_ids']).unsqueeze(0)  # 增加 Batch 维度
+                    input_ids = torch.tensor(ppl_result['input_ids']).unsqueeze(0)
                     attention_mask = torch.tensor(ppl_result['attention_mask']).unsqueeze(0)
                     step1_seg = step1_seg + [1] * (truncation_length - len(step1_seg))
                     token_type_ids = torch.tensor(step1_seg).unsqueeze(0)
@@ -580,26 +543,15 @@ def val(model, test_dataset, tokenizer, epoch):
                             emotion_clause_pre.append(i)
                         else:
                             pre_label.append(0)
-                    # emotion_precision, emotion_recall, emotion_f1, _ = precision_recall_fscore_support(label, pre_label)
                     emotion_precision, emotion_recall, emotion_f1, _ = precision_recall_fscore_support(label, pre_label,
                                                                                                        average='binary',
                                                                                                        pos_label=1)
+                            
 
-                    # 原代码貌似有误，应该需要缩进
-                    # total_emotion_precision += emotion_precision[1]
-                    # total_emotion_recall += emotion_recall[1]
-                    # total_emotion_f1 += emotion_f1[1]
+                total_emotion_precision += emotion_precision
+                total_emotion_recall += emotion_recall
+                total_emotion_f1 += emotion_f1
 
-                    total_emotion_precision += emotion_precision
-                    total_emotion_recall += emotion_recall
-                    total_emotion_f1 += emotion_f1
-
-                # total_emotion_precision += emotion_precision[0] if len(emotion_precision) == 1 else \
-                #     emotion_precision[1]
-                # total_emotion_recall += emotion_recall[0] if len(emotion_recall) == 1 else emotion_recall[1]
-                # total_emotion_f1 += emotion_f1[0] if len(emotion_f1) == 1 else emotion_f1[1]
-
-                # ========================== step2 ==========================
                 step_type = 'step2'
                 step2_query_list = []
                 emotion_clause_pre_ture = []
@@ -611,7 +563,7 @@ def val(model, test_dataset, tokenizer, epoch):
                         emotion_clause_pre_ture.append(i)
                 diff_num = len(emotion_clause_pre) - len(emotion_clause_pre_ture)
 
-                if len(emotion_clause_pre_ture) == 0:  # 未预测出真的情感子句
+                if len(emotion_clause_pre_ture) == 0: 
                     tmp_cause_precision, tmp_cause_recall, tmp_cause_f1 = 0, 0, 0
                     total_cause_precision += tmp_cause_precision
                     total_cause_recall += tmp_cause_recall
@@ -619,8 +571,8 @@ def val(model, test_dataset, tokenizer, epoch):
                 else:
                     for i in emotion_clause_pre_ture:
                         # dynamic_cause_query = clauses[
-                        #                           i] + 'What are the causal clauses corresponding to this sentence?'  # step2
-                        dynamic_cause_query = clauses[i] + all_cause_query_template  # step2
+                        #                           i] + 'What are the causal clauses corresponding to this sentence?' 
+                        dynamic_cause_query = clauses[i] + all_cause_query_template 
                         step2_query_list.append(dynamic_cause_query)
 
                     step2_input_list, step2_seg_list, step2_query_span_list, step2_clause_span_list = combine(
@@ -653,45 +605,29 @@ def val(model, test_dataset, tokenizer, epoch):
                             else:
                                 pre_label.append(0)
 
-                        # cause_precision, cause_recall, cause_f1, _ = precision_recall_fscore_support(label, pre_label)
                         cause_precision, cause_recall, cause_f1, _ = precision_recall_fscore_support(label, pre_label,
                                                                                                      average='binary',
                                                                                                      pos_label=1)
 
-                        # print("cause_precision:", cause_precision)
-                        # print("cause_recall:", cause_recall)
-                        # print("cause_f1:", cause_f1)
-
-                        # tmp_cause_precision += cause_precision[1]
-                        # tmp_cause_recall += cause_recall[1]
-                        # tmp_cause_f1 += cause_f1[1]
 
                         tmp_cause_precision += cause_precision
                         tmp_cause_recall += cause_recall
                         tmp_cause_f1 += cause_f1
 
-                    # step1 可能预测出错误的情感子句 个人认为错误的情感子句预测出的原因子句 哪怕预测正确 也没有意义 故未考虑 导致原因子句的评价指标可能偏低
                     total_cause_precision += tmp_cause_precision // len(emotion_clause_pre_ture)
                     total_cause_recall += tmp_cause_recall // len(emotion_clause_pre_ture)
                     total_cause_f1 += tmp_cause_f1 // len(emotion_clause_pre_ture)
 
-                    # total_cause_precision = tmp_cause_precision
-                    # total_cause_recall = tmp_cause_recall
-                    # total_cause_f1 = tmp_cause_f1
-
-                # ========================== step3 ==========================
                 step_type = 'step3'
                 step3_query_list = []
                 step3_pairs = []
                 pair_precision, pair_recall, pair_f1 = 0, 0, 0
-                if len(emotion_clause_pre_ture) == 0:  # 未预测出真的情感子句
+                if len(emotion_clause_pre_ture) == 0: 
                     pair_precision, pair_recall, pair_f1 = 0, 0, 0
-                elif len(cause_clause_pre) == 0:  # 未预测出原因子句
+                elif len(cause_clause_pre) == 0: 
                     pair_precision, pair_recall, pair_f1 = 0, 0, 0
                 else:
                     for i in cause_clause_pre:
-                        # dynamic_emotion_query = clauses[
-                        #                             i] + 'Which sentence is the emotional clause corresponding to this sentence?'  # step3
                         dynamic_emotion_query = clauses[i] + one_emotion_query_template  # step3
 
                         step3_query_list.append(dynamic_emotion_query)
@@ -715,16 +651,15 @@ def val(model, test_dataset, tokenizer, epoch):
                         rethink_emotion_clause = torch.argmax(pre).item()
                         step3_pairs.append((rethink_emotion_clause, cause_clause_pre[idx]))
 
-                    # 预测出的 <情感子句, 原因子句> 数量与真的 <情感子句, 原因子句> 数量可能不相符 故无法调sklearn库实现计算
                     final_pairs = []
                     for pair in step2_pairs:
                         if pair in step3_pairs:
                             final_pairs.append(pair)
                         else:
-                            if random.random() > step3_threshold:  # rethink 机制为验证成功的 <情感子句, 原因子句> 仍有一定概率保留
+                            if random.random() > step3_threshold: 
                                 final_pairs.append(pair)
 
-                    # 手动计算评价指标
+               
                     TP = 0
                     for pair in final_pairs:
                         if pair in pairs:
@@ -739,8 +674,7 @@ def val(model, test_dataset, tokenizer, epoch):
 
                 test_bar.update(1)
 
-        # 在此处计算平均值时需要检查分母是否为零
-        test_dataloader_len = max(test_dataloader_len, 1)  # 防止除零错误
+        test_dataloader_len = max(test_dataloader_len, 1) 
         average_emotion_precision = total_emotion_precision / test_dataloader_len
         average_emotion_recall = total_emotion_recall / test_dataloader_len
         average_emotion_f1 = total_emotion_f1 / test_dataloader_len
@@ -761,7 +695,6 @@ def val(model, test_dataset, tokenizer, epoch):
               ' Test Pair F1', average_pair_f1)
 
 
-########## 训练过程 Teacjer Forcing ##########
 def train(model, train_dataset, test_dataset):
     tokenizer = AutoTokenizer.from_pretrained(BERT_PATH)
 
@@ -772,37 +705,23 @@ def train(model, train_dataset, test_dataset):
         total_loss = 0
 
         model.train()
-        # 不同文本 step1 input 序列长度一致 但不同文本的子句个数不同，情感子句的位置不同，因此仍需遍历
-        # 不同文本 step2 input 序列长度一致 但不同文本的情感子句个数不同，不同情感子句对应的原因子句个数不同，位置不同，因此仍需遍历
-        # 不同文本 step3 input 序列长度一致 但不同文本的原因子句个数不同，位置不同，因此仍需遍历
-        # 故为了避免 padding query|子句长度|子句个数 引来冗余信息 降低模型的性能表现 将 batch_size 设置为 1
-        # PyTorch 提供的 DataLoader API接口无法处理字符串
-        # iter 迭代器没有 shuffle 用法, 考虑到当前不是分类任务 故不存在分类任务没有 shuffle 难以收敛的问题
-        # iter 迭代器不支持 len() 方法 故无法自动更新 tqdm
+
         train_dataloader = iter(train_dataset)
         train_dataloader_len = len(train_dataset)
         with tqdm(total=train_dataloader_len) as train_bar:
             train_bar.set_description('Epoch %i train' % epoch)
 
             for step1, step2, step3, emotion_clause_idx_list, emotion_cause_dic, cause_clause_idx_list, cause_emotion_dic in train_dataloader:
-                model.zero_grad()  # 梯度清零
-
-                # step1
+                model.zero_grad() 
+ 
                 step_type = 'step1'
                 step1_input_list, step1_seg_list, step1_query_span_list, step1_clause_span_list = step1
                 for idx, (step1_input, step1_seg, step1_query_span, step1_clause_span) in enumerate(
                         zip(step1_input_list, step1_seg_list, step1_query_span_list, step1_clause_span_list)):
-                    # input: ['[CLS]', '7', '月', '[SEP]', ...]
-                    # seg: [0, ..., 0, 1, ..., 1]
-                    # query_span: (1, 8)
-                    # clause_span: [(10, 4), (14, 11), ...]
-                    # emotion_clause_idx_list: [9]
-                    # cause_clause_idx_list: [8]
-                    # emotion_cause_dic: {9:[8]}
-                    # cause_emotion_dic: {8:9}
+
                     ppl_result = tokenizer(step1_input, add_special_tokens=False, padding='max_length', truncation=True,
                                            max_length=truncation_length, is_split_into_words=True)
-                    input_ids = torch.tensor(ppl_result['input_ids']).unsqueeze(0)  # 增加 Batch 维度
+                    input_ids = torch.tensor(ppl_result['input_ids']).unsqueeze(0)
                     attention_mask = torch.tensor(ppl_result['attention_mask']).unsqueeze(0)
                     step1_seg = step1_seg + [1] * (truncation_length - len(step1_seg))
                     token_type_ids = torch.tensor(step1_seg).unsqueeze(0)
@@ -813,7 +732,7 @@ def train(model, train_dataset, test_dataset):
                                        cause_emotion_dic)
                     step1_loss = criterion(pre, label)
 
-                # step2
+
                 pre_list = []
                 label_list = []
                 step_type = 'step2'
@@ -838,7 +757,7 @@ def train(model, train_dataset, test_dataset):
                 for pre, label in zip(pre_list, label_list):
                     step2_loss += criterion(pre, label)
 
-                # step3
+   
                 pre_list = []
                 label_list = []
                 step_type = 'step3'
@@ -864,7 +783,7 @@ def train(model, train_dataset, test_dataset):
                     step3_loss += criterion(pre, label)
 
                 loss = (step1_loss + step2_loss + step3_loss) / 2
-                # 模型更新
+           
                 loss.backward()
                 optimizer.step()
                 scheduler.step()
@@ -894,11 +813,11 @@ def train(model, train_dataset, test_dataset):
     plt.show()
 
 
-########## 网络模型 ##########
+
 model = Net().to(device)
 # model.load_state_dict(torch.load('/root/COLING-ECPE/Net.pth'))
 
-########## 损失函数 + 优化器 ##########
+
 criterion = nn.BCELoss()
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
 training_steps = epochs * len(train_dataset) // batch_size
@@ -906,18 +825,5 @@ warmup_steps = int(training_steps * 0.1)
 scheduler = get_linear_schedule_with_warmup(optimizer=optimizer, num_warmup_steps=warmup_steps,
                                             num_training_steps=training_steps)
 
-########## 模型训练 + 验证 ##########
-train(model, train_dataset, test_dataset)
 
-########## 实验结果分析 ##########
-# 1. 现象: 情感子句的评价指标结果与论文接近 原因子句和 <情感子句，原因子句> 对的评价指标结果低于论文
-#    原因: 从原始训练集中抽样了十分之一的数据训练模型 测试数据与原始测试集一致
-#    分析: 情感子句的判别较为容易
-#    Idea: 增加训练数据集 用单任务学习替换多任务学习 聚焦于单个任务
-# 2. 现象: 原因子句的预测率低于 <情感子句，原因子句> 对的预测率 二者召回率相近
-#    原因: 如 PPT 所示
-#    分析: 验证了 rethink 机制的有效性
-# 3. 其他Idea: a.用更强大的预训练模型 如 Roberta 等
-#              b.双 MRC 框架 可能成本开销与性能提升不匹配 rethink 机制有异曲同工之妙
-#              c.token 编码阶段仅编码 query 和唯一子句
-#              d.能否同时拥有鸡和蛋 真正实现互相指导
+train(model, train_dataset, test_dataset)
