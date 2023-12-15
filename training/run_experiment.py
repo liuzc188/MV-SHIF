@@ -9,11 +9,6 @@ from torch.nn import functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import AdamW, get_linear_schedule_with_warmup, BertTokenizer, AutoTokenizer
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.append(parent_dir)
-sys.path.append('/home/ubuntu/workspace1/rmj/ECPE')
-
 from ecpe_extractor.artifacts.config import *
 from ecpe_extractor.artifacts.utils import *
 from ecpe_extractor.data.data_loader import *
@@ -100,7 +95,7 @@ def main(configs, fold_id, tokenizer):
                 print(f'Epoch: {epoch}, step: {train_step}, loss: {loss_e}, {loss_ec}, {loss_ce}')
 
         # Load emotion-related dictionary
-        with open('/home/ubuntu/workspace1/rmj/ECPE/ecpe_extractor/data/sentimental_clauses.pkl', 'rb') as f:
+        with open('./ecpe_extractor/data/sentimental_clauses.pkl', 'rb') as f:
             emo_dictionary = pickle.load(f)
 
         with torch.no_grad():
@@ -127,7 +122,6 @@ if __name__ == '__main__':
     start_time = time.time()
     configs = Config()
     tokenizer = AutoTokenizer.from_pretrained(configs.bert_cache_path)
-    # tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
 
     result_e, result_c, result_p = [0, 0, 0], [0, 0, 0], [0, 0, 0]
     res, rcs = [0, 0, 0], [0, 0, 0]
